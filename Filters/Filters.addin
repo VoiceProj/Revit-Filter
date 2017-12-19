@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>Filter</Name>
+    <Assembly>Filters.dll</Assembly>
+    <AddInId>a9873047-014a-4fba-b46f-91bd55fa5dc4</AddInId>
+    <FullClassName>Filters.ExternalApplication</FullClassName>
+    <VendorId>BIMACAD</VendorId>
+    <VendorDescription>BIM Academy LLC, www.bimacad.ru</VendorDescription>
+  </AddIn>
+</RevitAddIns>

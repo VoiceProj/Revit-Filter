@@ -1,0 +1,278 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Navigation;
+using System.Windows.Shapes;
+
+using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Architecture;
+using Autodesk.Revit.UI;
+using Autodesk.Revit.UI.Selection;
+using Autodesk.Revit.ApplicationServices;
+using Autodesk.Revit.Attributes;
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Reflection;
+using System.Collections;
+
+namespace Filters
+{
+    /// <summary>
+    /// Логика взаимодействия для UserControl1.xaml
+    /// </summary>
+    /// 
+
+    class CategoryComparer : IEqualityComparer<Category>
+    {
+        #region Implementation of IEqualityComparer<in Category>
+
+        public bool Equals(Category x, Category y)
+        {
+            if (x == null || y == null) return false;
+            return x.Id.Equals(y.Id);
+        }
+
+        public int GetHashCode(Category obj)
+        {
+            return obj.Id.IntegerValue;
+        }
+
+        #endregion
+    }
+
+    class CategoryNameComparer : IComparer<Category>
+    {
+        public int Compare(Category c1, Category c2)
+        {
+            if (c1 != null && c2 != null && (String.Compare(c1.Name, c2.Name) < 0))
+            {
+                return -1;
+            }
+            else return 1;
+        }
+    }
+
+    public partial class UserControl1 : Window
+    {
+        Document doc;
+        List<Category> categories;
+        FilteredElementCollector catCollector;
+        IList<Element> elements;
+        List<ElementId> elementsId = new List<ElementId>();
+        List<ElementId> FilteredElementsId = new List<ElementId>();
+        UIDocument uiDoc;
+        //public Dictionary<string, Category> categoryList = new Dictionary<string, Category>();
+
+        public UserControl1(ExternalCommandData commandData)
+        {
+            doc = commandData.Application.ActiveUIDocument.Document;
+            InitializeComponent();
+            catCollector = new FilteredElementCollector(doc);
+            uiDoc = new UIDocument(doc);
+            elements = catCollector.WhereElementIsElementType()
+                .ToElements();
+            CreateCategoryList();       //Создание categories - списка всех категорий в проекте
+        }
+
+        /// <summary>
+        /// Создание Dictionary, содержащего ( Имя семейства; Лист всех типов семейства )
+        /// </summary>
+        /// <param name="doc">Текущий документ</param>
+        /// <param name="cat">Категория</param>
+        /// <returns>Созданный словарь</returns>
+        public static Dictionary<string, List<FamilySymbol>> FindFamilyTypes(Document doc, BuiltInCategory cat)
+        {
+            Dictionary < string, List < FamilySymbol >> dict = new FilteredElementCollector(doc)
+                            .WherePasses(new ElementClassFilter(typeof(FamilySymbol)))
+                            .WherePasses(new ElementCategoryFilter(cat))
+                            .Cast<FamilySymbol>()
+                            .GroupBy(e => e.Family.Name)
+                            .ToDictionary(e => e.Key, e => e.ToList());            
+            return dict;
+        }
+
+        /// <summary>
+        /// Создание списка всех категорий в проекте
+        /// </summary>
+        public void CreateCategoryList()
+        {
+            categories = elements
+                .Select(x => x.Category)
+                .Distinct(new CategoryComparer())
+                .ToList();
+
+            categories.Sort(new CategoryNameComparer());
+
+            foreach (Category c in categories)
+            {
+                ComboBoxItem cbi = new ComboBoxItem();
+                cbi.HorizontalContentAlignment = HorizontalAlignment.Left;
+                cbi.Padding = new Thickness(30, 0, 0, 0);
+                cbi.Content = c.Name;
+                cbi.Tag = c;
+                comboBox.Items.Add(cbi);
+            }
+        }
+
+
+        // Переход на новую форму
+        private void button_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as Button).Content.ToString() != "Выбрано элементов: 0")
+            {
+                this.Hide();
+                Selector selForm = new Selector(elementsId, doc);
+                selForm.Topmost = true;
+                selForm.Show();
+                selForm.Closed += SelForm_Closed;
+            }
+            
+        }
+
+        private void SelForm_Closed(object sender, EventArgs e)
+        {
+            FilteredElementsId = uiDoc.Selection.GetElementIds().ToList();
+            button.Content = "Выбрано элементов: " + FilteredElementsId.Count.ToString();
+            this.Show();
+        }
+
+        private void comboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            button.Content = "Выбрано элементов: 0";
+            listBox.Items.Clear();
+            elementsId.Clear(); // Иначе выбор нескольких категорий
+            Category c = (((sender as System.Windows.Controls.ComboBox).SelectedItem as ComboBoxItem).Tag as Category);
+            
+            // Попытка найти BuiltIn категорию для "c", если получается, то ищем для нее тип
+            BuiltInCategory myCatEnum = (BuiltInCategory)Enum.Parse(typeof(BuiltInCategory), c.Id.ToString());
+            Dictionary<string, List<FamilySymbol>> winFamilyTypes = FindFamilyTypes(doc, myCatEnum);
+            foreach (KeyValuePair<string, List<FamilySymbol>> entry in winFamilyTypes)
+            {
+                foreach (FamilySymbol item in entry.Value)
+                {
+                    IList<Element> instances = new List<Element>();
+                    instances = new FilteredElementCollector(doc)           // Поиск экземпляров выбранного типа, ID всех найденных экземпляров пердается через Tag
+                        .OfClass(typeof(FamilyInstance))
+                        .Where(z => z.Name == item.Name && z.Location != null)
+                        .ToList();
+                    if (instances.Count != 0)
+                    {
+                        List<ElementId> ids = new List<ElementId>();
+                        foreach (Element z in instances)
+                        {
+                            ids.Add(z.Id);
+                        }
+                        ListBoxItem lbi = new ListBoxItem();
+                        lbi.Content = item.Name + ";  Экземпляров: " + instances.Count.ToString();
+                        lbi.Selected += listBoxItem_Selected;
+                        lbi.Unselected += listBoxItem_Unselected;
+                        lbi.Tag = ids;
+                        listBox.Items.Add(lbi);
+                    }
+                }
+            }
+
+
+            // Если семейство системное, то для него нет FamilySymbol и нужно узнавать тип через ElementType
+            if (winFamilyTypes.Count == 0)
+            {
+                ElementId ei = c.Id;
+                ElementCategoryFilter filter = new ElementCategoryFilter(ei);
+                var collector = new FilteredElementCollector(doc);                
+                IList<Element> famTypes = collector
+                    .WherePasses(filter)
+                    .OfClass(typeof(ElementType))
+                    .ToElements();
+                // Проблема в получении экземпляров системных семейств
+                Dictionary<string, IList<Element>> inst = new Dictionary<string, IList<Element>>();
+                foreach (Element ele in famTypes)
+                {
+                    ElementType type = ele as ElementType;
+                    IList<Element> instances = new List<Element>();
+                    instances = new FilteredElementCollector(doc)           // Поиск экземпляров выбранного типа, ID всех найденных экземпляров пердается через Tag
+                        .WhereElementIsNotElementType()
+                        .ToList();
+                    IList<Element> instances2 = new List<Element>();
+                    foreach (Element a in instances)
+                    {
+                        Parameter test = a.get_Parameter(BuiltInParameter.ELEM_TYPE_PARAM);
+                        if (test != null)
+                        {
+                            string aas = test.AsValueString();
+                            if (test.AsValueString() == type.Name && a.Category.Name==type.Category.Name)//
+                            {
+                                instances2.Add(a);
+                            }
+                        }
+                    }
+                    if (instances2.Count!=0)
+                        inst.Add(type.Name, instances2);
+                }
+                foreach (KeyValuePair<string, IList<Element>> kv in inst)
+                {
+                    List<ElementId> ids = new List<ElementId>();
+                    foreach (Element z in kv.Value)
+                    {
+                        ids.Add(z.Id);
+                    }
+                    ListBoxItem lbi = new ListBoxItem();
+                    lbi.Content = kv.Key + ": "
+                      + ";  Экземпляров: " + kv.Value.Count.ToString();
+                    lbi.Tag = ids;
+                    lbi.Selected += listBoxItem_Selected;
+                    lbi.Unselected += listBoxItem_Unselected;
+                    listBox.Items.Add(lbi);
+                }
+            }
+        }
+
+        private void listBoxItem_Selected(object sender, EventArgs e)
+        {
+            if (FilteredElementsId.Count == 0)
+            {
+                //elementsId.Clear();
+                elementsId.AddRange((sender as ListBoxItem).Tag as List<ElementId>);
+            }
+            else
+            {
+                elementsId = FilteredElementsId;
+                foreach (ElementId ei in (sender as ListBoxItem).Tag as List<ElementId>)
+                    if (elementsId.Contains(ei))
+                        break;
+                    else
+                        elementsId.Add(ei);
+            }
+            button.Content = "Выбрано элементов: " + elementsId.Count;
+            uiDoc.Selection.SetElementIds(elementsId);
+        }
+
+    
+        private void listBoxItem_Unselected(object sender, EventArgs e)
+        {
+            List<ElementId> toRemove = (sender as ListBoxItem).Tag as List<ElementId>;
+            foreach (ElementId ei in toRemove)
+            {
+                FilteredElementsId.Remove(ei);
+                elementsId.Remove(ei);
+            }
+            button.Content = "Выбрано элементов: " + elementsId.Count;
+            uiDoc.Selection.SetElementIds(elementsId);
+        }
+
+
+        public IList<Element> GetInstancesFromSystemCategory(Category c)
+        {
+
+            return true;
+        }
+    }
+}
